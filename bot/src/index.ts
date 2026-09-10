@@ -1,7 +1,28 @@
 import "dotenv/config";
+import http from "node:http";
 import { Bot, InputFile, Keyboard, InlineKeyboard, GrammyError, HttpError } from "grammy";
 import { generateGroqContent } from "./groq.js";
 import { DocType } from "./prompt.js";
+
+// Health-check server opsional untuk cloud hosting (Render Free Web Service, Railway, Fly.io)
+const cloudPort = process.env.PORT || process.env.HTTP_PORT;
+if (cloudPort) {
+  http
+    .createServer((_, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          status: "healthy",
+          bot: "VibeDoc Bot",
+          uptime: Math.floor(process.uptime()),
+          timestamp: new Date().toISOString(),
+        })
+      );
+    })
+    .listen(Number(cloudPort), () => {
+      console.log(`🌐 Cloud health-check HTTP server aktif di port ${cloudPort}`);
+    });
+}
 
 const token = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
 
