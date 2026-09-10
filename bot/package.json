@@ -1,0 +1,21 @@
+{
+  "name": "vibedoc-telegram-bot",
+  "version": "1.0.0",
+  "description": "VibeDoc Telegram Bot - Instant Architecture & PRD Generator for Vibe Coding",
+  "main": "dist/bot.js",
+  "scripts": {
+    "dev": "tsx watch src/bot.ts",
+    "build": "tsc",
+    "start": "node dist/bot.js"
+  },
+  "dependencies": {
+    "@google/genai": "^2.21.0",
+    "dotenv": "^16.4.7",
+    "grammy": "^1.46.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}
