@@ -39,13 +39,13 @@ export async function generateGroqContent(
   docType: DocType = "arch"
 ): Promise<GroqGenerationResult> {
   const groq = getGroqClient();
-  const requestedModel = process.env.GROQ_MODEL || "qwen/qwen3.8-27b";
+  const requestedModel = process.env.GROQ_MODEL || "groq/compound";
   const candidateModels = [
     requestedModel,
-    "qwen/qwen3.8-27b",
-    "llama-3.3-70b-versatile",
-    "openai/gpt-oss-120b",
+    "groq/compound",
     "groq/compound-mini",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b",
   ];
 
   const uniqueModels = Array.from(new Set(candidateModels));
@@ -98,18 +98,24 @@ export async function generateGroqContent(
         };
       } catch (err: unknown) {
         lastError = err;
+        const errStr = err instanceof Error ? err.message.toLowerCase() : "";
+
+        // Jika model 404 (tidak tersedia) ATAU 429 (rate limit habis), otomatis coba model cadangan berikutnya
         if (
-          err instanceof Error &&
-          (err.message.includes("404") ||
-            err.message.includes("model_not_found") ||
-            err.message.includes("does not exist"))
+          errStr.includes("404") ||
+          errStr.includes("model_not_found") ||
+          errStr.includes("does not exist") ||
+          errStr.includes("429") ||
+          errStr.includes("rate_limit_exceeded") ||
+          errStr.includes("rate limit")
         ) {
           console.warn(
-            `[Groq Warning] Model "${model}" tidak tersedia di akun ini, mencoba fallback model berikutnya...`
+            `[Groq Warning] Model "${model}" terkena kendala (rate limit / not found). Mencoba fallback model berikutnya...`
           );
           continue;
         }
-        // Jika error bukan 404 (misal rate limit 429 atau 401), jangan coba model lain
+
+        // Jika error fatal (misal API key 401 tidak valid), langsung lempar
         throw err;
       }
     }
