@@ -149,6 +149,64 @@ function extractPreview(markdown: string): string {
 }
 
 /**
+ * Helper untuk mengirim pesan teks panjang secara aman dengan memecah pesan
+ * jika melebihi batas 4096 karakter dari Telegram API.
+ */
+async function sendSafeMessage(
+  ctx: any,
+  text: string,
+  replyMarkup?: InlineKeyboard
+): Promise<void> {
+  const MAX_CHUNK = 3800; // Buffer aman dari batas 4096 karakter Telegram
+
+  if (text.length <= MAX_CHUNK) {
+    try {
+      await ctx.reply(text, {
+        parse_mode: "Markdown",
+        reply_markup: replyMarkup,
+      });
+    } catch {
+      await ctx.reply(text, {
+        reply_markup: replyMarkup,
+      });
+    }
+    return;
+  }
+
+  // Pecah teks berdasarkan baris / paragraf
+  const chunks: string[] = [];
+  let currentChunk = "";
+
+  const lines = text.split("\n");
+  for (const line of lines) {
+    if ((currentChunk + "\n" + line).length > MAX_CHUNK) {
+      if (currentChunk.trim()) chunks.push(currentChunk.trim());
+      currentChunk = line;
+    } else {
+      currentChunk = currentChunk ? currentChunk + "\n" + line : line;
+    }
+  }
+  if (currentChunk.trim()) chunks.push(currentChunk.trim());
+
+  // Kirim setiap potongan secara berurutan
+  for (let i = 0; i < chunks.length; i++) {
+    const isLast = i === chunks.length - 1;
+    const markup = isLast ? replyMarkup : undefined;
+
+    try {
+      await ctx.reply(chunks[i], {
+        parse_mode: "Markdown",
+        reply_markup: markup,
+      });
+    } catch {
+      await ctx.reply(chunks[i], {
+        reply_markup: markup,
+      });
+    }
+  }
+}
+
+/**
  * Pesan Sambutan / Bantuan
  */
 const welcomeMessage = `
@@ -334,11 +392,6 @@ bot.on("message:text", async (ctx) => {
     try {
       const result = await generateGroqContent(text, "chat");
 
-      // Hapus pesan status loading
-      try {
-        await ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id);
-      } catch {}
-
       // Keyboard inline follow-up untuk konversi ke file
       const followUpKeyboard = new InlineKeyboard()
         .text("🏗️ ARCHITECTURE.md", "quick_arch")
@@ -350,25 +403,28 @@ bot.on("message:text", async (ctx) => {
       // Simpan ide terakhir di sesi agar bisa langsung di-generate via tombol inline
       session.pendingIdea = text;
 
+      // Kirim hasil chat secara aman (auto-split jika panjang > 4096 karakter)
+      await sendSafeMessage(ctx, result.content, followUpKeyboard);
+
+      // Hapus pesan status loading setelah pesan sukses terkirim
       try {
-        await ctx.reply(result.content, {
-          parse_mode: "Markdown",
-          reply_markup: followUpKeyboard,
-        });
-      } catch {
-        await ctx.reply(result.content, {
-          reply_markup: followUpKeyboard,
-        });
-      }
+        await ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id);
+      } catch {}
     } catch (error: unknown) {
       console.error("[Chat Error]:", error);
       const errMsg = error instanceof Error ? error.message : "Terjadi kesalahan.";
-      await ctx.api.editMessageText(
-        ctx.chat.id,
-        statusMsg.message_id,
-        `❌ <b>Gagal Memproses Diskusi</b>\n\n${errMsg}`,
-        { parse_mode: "HTML" }
-      );
+      try {
+        await ctx.api.editMessageText(
+          ctx.chat.id,
+          statusMsg.message_id,
+          `❌ <b>Gagal Memproses Diskusi</b>\n\n${errMsg}`,
+          { parse_mode: "HTML" }
+        );
+      } catch {
+        await ctx.reply(`❌ <b>Gagal Memproses Diskusi</b>\n\n${errMsg}`, {
+          parse_mode: "HTML",
+        });
+      }
     }
     return;
   }
