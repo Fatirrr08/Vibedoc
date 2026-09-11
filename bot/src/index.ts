@@ -5,23 +5,32 @@ import { generateGroqContent } from "./groq.js";
 import { DocType } from "./prompt.js";
 
 // Health-check server opsional untuk cloud hosting (Render Free Web Service, Railway, Fly.io)
+// Hanya aktif jika bot dijalankan mandiri (bukan dual mode bersama Next.js)
 const cloudPort = process.env.PORT || process.env.HTTP_PORT;
-if (cloudPort) {
-  http
-    .createServer((_, res) => {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          status: "healthy",
-          bot: "VibeDoc Bot",
-          uptime: Math.floor(process.uptime()),
-          timestamp: new Date().toISOString(),
-        })
-      );
-    })
-    .listen(Number(cloudPort), () => {
-      console.log(`🌐 Cloud health-check HTTP server aktif di port ${cloudPort}`);
-    });
+if (cloudPort && process.env.IS_DUAL_MODE !== "true") {
+  const server = http.createServer((_, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        status: "healthy",
+        bot: "VibeDoc Bot",
+        uptime: Math.floor(process.uptime()),
+        timestamp: new Date().toISOString(),
+      })
+    );
+  });
+
+  server.on("error", (err: any) => {
+    if (err.code === "EADDRINUSE") {
+      console.warn(`⚠️ Port ${cloudPort} sudah digunakan. Bot tetap berjalan tanpa standalone HTTP server.`);
+    } else {
+      console.error("⚠️ HTTP server error:", err);
+    }
+  });
+
+  server.listen(Number(cloudPort), () => {
+    console.log(`🌐 Cloud health-check HTTP server aktif di port ${cloudPort}`);
+  });
 }
 
 const token = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
@@ -658,38 +667,58 @@ bot.catch((err) => {
   }
 });
 
+let isStopping = false;
+
 /**
  * Graceful Shutdown
  */
 const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
 for (const signal of signals) {
   process.once(signal, () => {
+    isStopping = true;
     console.log(`\n🛑 Menerima sinyal ${signal}. Menghentikan VibeDoc Bot secara aman...`);
-    bot.stop();
+    try {
+      bot.stop();
+    } catch {}
   });
 }
 
 /**
- * Jalankan Bot menggunakan Polling
+ * Tangani uncaught errors pada level process agar tidak langsung exit mendadak
+ */
+process.on("unhandledRejection", (reason) => {
+  console.error("⚠️ [Process Unhandled Rejection]:", reason);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("⚠️ [Process Uncaught Exception]:", error);
+});
+
+/**
+ * Jalankan Bot menggunakan Polling dengan mekanisme Auto-Reconnect
  */
 async function start() {
-  try {
-    const botInfo = await bot.api.getMe();
-    console.log("=========================================");
-    console.log(`🤖 VibeDoc Bot (Reply Keyboard & State Machine) Aktif!`);
-    console.log(`👤 Username: @${botInfo.username}`);
-    console.log(`⚡ LLM: Groq (Multi-Prompt Router)`);
-    console.log(`🚀 Mode: Long Polling`);
-    console.log("=========================================");
+  while (!isStopping) {
+    try {
+      const botInfo = await bot.api.getMe();
+      console.log("=========================================");
+      console.log(`🤖 VibeDoc Bot (Reply Keyboard & State Machine) Aktif!`);
+      console.log(`👤 Username: @${botInfo.username}`);
+      console.log(`⚡ LLM: Groq (Multi-Prompt Router)`);
+      console.log(`🚀 Mode: Long Polling`);
+      console.log("=========================================");
 
-    await bot.start({
-      onStart: (info) => {
-        console.log(`✅ Polling aktif untuk @${info.username}`);
-      },
-    });
-  } catch (err) {
-    console.error("❌ Gagal memulai bot:", err);
-    process.exit(1);
+      await bot.start({
+        onStart: (info) => {
+          console.log(`✅ Polling aktif untuk @${info.username}`);
+        },
+      });
+    } catch (err) {
+      if (isStopping) break;
+      console.error("❌ Kendala koneksi/polling pada Telegram Bot:", err);
+      console.log("⏳ Mencoba menyambung kembali ke Telegram dalam 5 detik...");
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
   }
 }
 

@@ -6,25 +6,54 @@ console.log("=========================================");
 console.log("🚀 Memulai VibeDoc Production Services...");
 console.log("=========================================");
 
-// 1. Jalankan Telegram Bot di background
+let isShuttingDown = false;
+let botProcess = null;
+let restartTimeout = null;
+
+// 1. Jalankan Telegram Bot di background dengan fitur Auto-Respawn
 const botScript = path.join(__dirname, "bot", "dist", "index.js");
-if (fs.existsSync(botScript)) {
+
+function startBot() {
+  if (isShuttingDown) return;
+
+  if (!fs.existsSync(botScript)) {
+    console.warn("⚠️ File bot/dist/index.js tidak ditemukan, Telegram Bot dilewati.");
+    return;
+  }
+
   console.log("🤖 Menjalankan VibeDoc Telegram Bot di background...");
-  const botProcess = spawn("node", [botScript], {
+
+  // Hindari bentrok port: bot tidak boleh mengikat PORT yang sama dengan Next.js
+  const botEnv = { ...process.env, IS_DUAL_MODE: "true" };
+  delete botEnv.PORT;
+  delete botEnv.HTTP_PORT;
+
+  botProcess = spawn("node", [botScript], {
     stdio: "inherit",
-    env: process.env,
+    env: botEnv,
   });
 
   botProcess.on("error", (err) => {
     console.error("❌ Gagal menjalankan Telegram Bot:", err);
   });
 
-  botProcess.on("exit", (code) => {
-    console.log(`⚠️ Telegram Bot berhenti dengan exit code ${code}`);
+  botProcess.on("exit", (code, signal) => {
+    botProcess = null;
+    if (isShuttingDown) {
+      console.log(`🛑 Telegram Bot dimatikan (code: ${code}, signal: ${signal}).`);
+      return;
+    }
+
+    console.warn(
+      `⚠️ Telegram Bot terhenti (code: ${code}, signal: ${signal}). Me-restart otomatis dalam 5 detik...`
+    );
+    restartTimeout = setTimeout(() => {
+      startBot();
+    }, 5000);
   });
-} else {
-  console.warn("⚠️ File bot/dist/index.js tidak ditemukan, Telegram Bot dilewati.");
 }
+
+startBot();
 
 // 2. Jalankan Next.js Web Server untuk melayani request HTTP port di Render
 const port = process.env.PORT || "3000";
@@ -35,13 +64,35 @@ const nextServer = spawn("npx", ["next", "start", "-p", port], {
 });
 
 nextServer.on("close", (code) => {
-  process.exit(code ?? 0);
+  if (!isShuttingDown) {
+    console.log(`⚠️ Next.js Web Server tertutup dengan code ${code}`);
+    isShuttingDown = true;
+    if (restartTimeout) clearTimeout(restartTimeout);
+    if (botProcess) {
+      try {
+        botProcess.kill("SIGTERM");
+      } catch {}
+    }
+    process.exit(code ?? 0);
+  }
 });
 
 // Penanganan graceful shutdown
 ["SIGINT", "SIGTERM"].forEach((signal) => {
   process.on(signal, () => {
     console.log(`\n🛑 Menerima sinyal ${signal}. Menghentikan semua service...`);
+    isShuttingDown = true;
+    if (restartTimeout) clearTimeout(restartTimeout);
+    if (botProcess) {
+      try {
+        botProcess.kill("SIGTERM");
+      } catch {}
+    }
+    if (nextServer) {
+      try {
+        nextServer.kill("SIGTERM");
+      } catch {}
+    }
     process.exit(0);
   });
 });
